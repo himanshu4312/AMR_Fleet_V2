@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""
-Relays each robot's namespaced /tf and /tf_static onto the shared, global
-/tf and /tf_static topics, purely so generic tools that only know the
-conventional single global TF topic (RViz, rqt_tf_tree, tf2_echo run without
-a namespace, ...) can see every robot's frames in one place.
-
-This does NOT change how Nav2/AMCL themselves consume TF - they keep using
-their own per-robot /<robot_name>/tf topics exactly as before. This node is
-purely an additional, non-authoritative mirror for visualization/introspection.
-
-Safe by construction: every frame name in this workspace is already prefixed
-with its robot's namespace (robot1/base_link, robot2/base_link, ...), so
-merging multiple robots' TF streams onto one topic can never collide.
-"""
 
 from tf2_msgs.msg import TFMessage
 import rclpy

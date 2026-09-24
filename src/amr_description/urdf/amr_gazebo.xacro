@@ -44,9 +44,4 @@
         </plugin>
     </gazebo>
 
-    <!-- gz-sim-sensors-system is NOT declared here: it owns the shared
-         rendering scene, so it must be loaded exactly once per world (see
-         world/maze.sdf), not once per spawned robot model. Two copies (e.g.
-         one per robot in a multi-robot bringup) crash with "Scene already
-         exists with name: scene". -->
 </robot>

@@ -1,0 +1,5 @@
+<library path="amr_planner_plugins">
+  <class name="amr_planner_plugins/GuardedGoalChecker" type="amr_planner_plugins::GuardedGoalChecker" base_class_type="nav2_core::GoalChecker">
+    <description>Wraps nav2_controller::SimpleGoalChecker to refuse a default-constructed (position 0,0,0, orientation 0,0,0,1) goal pose - the fingerprint of a caller ignoring a failed map-&gt;odom TF transform - instead of falsely reporting the goal as reached.</description>
+  </class>
+</library>

@@ -1,17 +1,3 @@
-// Copyright 2026 Himanshu
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #ifndef AMR_PLANNER_PLUGINS__GRID_SEARCH_PLANNER_HPP_
 #define AMR_PLANNER_PLUGINS__GRID_SEARCH_PLANNER_HPP_
 
@@ -33,17 +19,6 @@
 namespace amr_planner_plugins
 {
 
-// Shared 8-connected grid-search planner: holds the priority-queue search
-// loop, costmap bookkeeping, and Nav2 lifecycle plumbing common to any
-// planner that differs only in how it weighs "distance still to go".
-// Subclasses (AStarPlanner, DijkstraPlanner) supply the heuristic.
-//
-// This class, together with RRTPlanner, is this package's Strategy pattern:
-// nav2_core::GlobalPlanner is the Strategy interface Nav2 itself defines,
-// and AStarPlanner / DijkstraPlanner / RRTPlanner are three interchangeable
-// concrete strategies behind it — planner_server picks one per `planner_id`
-// at runtime (see nav2_params.yaml) with no code on either side aware of
-// which concrete algorithm it's talking to.
 class GridSearchPlanner : public nav2_core::GlobalPlanner
 {
 public:
@@ -90,16 +65,12 @@ protected:
   {
     bool operator()(const OpenSetEntry & a, const OpenSetEntry & b) const
     {
-      return a.f_cost > b.f_cost;  // min-heap: smallest f_cost served first
+      return a.f_cost > b.f_cost;
     }
   };
 
-  // Distance-to-go estimate from a cell to the goal, in the same units as
-  // traversalCost(). Return 0.0 everywhere to turn this into Dijkstra.
   virtual double heuristic(const CellIndex & a, const CellIndex & b) const = 0;
 
-  // Used only in log messages so runtime output identifies which concrete
-  // planner is running.
   virtual std::string plannerTypeName() const = 0;
 
   bool searchPath(
@@ -119,9 +90,9 @@ protected:
   std::string global_frame_, name_;
 
   bool allow_unknown_{true};
-  double cost_weight_{0.8};  // scales inflated costmap cost into edge weight
+  double cost_weight_{0.8};
 };
 
-}  // namespace amr_planner_plugins
+}
 
-#endif  // AMR_PLANNER_PLUGINS__GRID_SEARCH_PLANNER_HPP_
+#endif

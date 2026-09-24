@@ -48,10 +48,6 @@ bt_navigator:
     bt_loop_duration: 10
     default_server_timeout: 20
     wait_for_service_timeout: 1000
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
-    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
       - nav2_compute_path_through_poses_action_bt_node
@@ -113,31 +109,24 @@ controller_server:
   ros__parameters:
     use_sim_time: True
     controller_frequency: 20.0
+    transform_tolerance: 1.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
+    goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
 
-    # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.5
-      movement_time_allowance: 10.0
-    # Goal checker parameters
-    #precise_goal_checker:
-    #  plugin: "nav2_controller::SimpleGoalChecker"
-    #  xy_goal_tolerance: 0.25
-    #  yaw_goal_tolerance: 0.25
-    #  stateful: True
+      movement_time_allowance: 60.0
     general_goal_checker:
       stateful: True
-      plugin: "nav2_controller::SimpleGoalChecker"
+      plugin: "amr_planner_plugins/GuardedGoalChecker"
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
-    # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
@@ -149,8 +138,6 @@ controller_server:
       min_speed_xy: 0.0
       max_speed_xy: 0.26
       min_speed_theta: 0.0
-      # Add high threshold velocity for turtlebot 3 issue.
-      # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
       acc_lim_x: 1.0
       acc_lim_y: 0.0
       acc_lim_theta: 2.0
@@ -163,7 +150,7 @@ controller_server:
       sim_time: 1.7
       linear_granularity: 0.05
       angular_granularity: 0.025
-      transform_tolerance: 0.2
+      transform_tolerance: 1.0
       xy_goal_tolerance: 0.25
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
@@ -262,8 +249,6 @@ global_costmap:
 map_server:
   ros__parameters:
     use_sim_time: True
-    # Overridden in launch by the "map" launch configuration or provided default value.
-    # To use in yaml, remove the default "map" value in the tb3_simulation_launch.py file & provide full path to map below.
     yaml_filename: ""
 
 map_saver:
@@ -278,18 +263,10 @@ planner_server:
   ros__parameters:
     expected_planner_frequency: 20.0
     use_sim_time: True
-    
-    # Three distinct, independently reachable planner instances so the
-    # algorithms can be compared directly (see README "The three global
-    # planners"). To change which class backs GridBased (what rviz's
-    # "2D Nav Goal" drives with), comment out the other three "plugin:"
-    # lines below and rebuild amr_description_bringup.
+
     planner_plugins: ["GridBased", "DijkstraGridBased", "RRTGlobal"]
     GridBased:
-      #plugin: "nav2_navfn_planner/NavfnPlanner"
-      #plugin: "amr_planner_plugins/AStarPlanner"
       plugin: "amr_planner_plugins/DijkstraPlanner"
-      #plugin: "amr_planner_plugins/RRTPlanner"
       allow_unknown: true
       cost_weight: 0.8
     DijkstraGridBased:

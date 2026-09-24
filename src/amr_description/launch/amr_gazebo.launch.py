@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""
-Combined launch file for the amr_description package.
-
-Starts:
-  - robot_state_publisher   (parses the xacro -> robot_description -> TF)
-  - Ignition Gazebo Fortress (loads world/maze.sdf)
-  - spawn (ros_gz_sim create) -> spawns the robot from /robot_description into Gazebo
-  - a /clock bridge           (keeps RViz/TF in sync with simulation time)
-  - rviz2                    (loads rviz/amr_urdf_config.rviz)
-
-Equivalent to the original amr_gazebo XML launch file, rewritten in
-Python launch syntax so it matches the .launch.py extension.
-"""
-
 import os
-
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -61,8 +46,6 @@ def generate_launch_description():
         'yaw', default_value='0.0', description='Initial yaw spawn pose (radians)'
     )
 
-    # xacro output must be wrapped in ParameterValue(..., value_type=str),
-    # otherwise robot_state_publisher can throw a YAML/type parsing error.
     robot_description = ParameterValue(
         Command(['xacro ', urdf_path, ' robot_name:=', robot_name]),
         value_type=str

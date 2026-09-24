@@ -1,23 +1,3 @@
-// Copyright 2026 Himanshu
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// Typed test suite run once for AStarPlanner and once for DijkstraPlanner:
-// both share GridSearchPlanner's search loop and are expected to behave
-// identically on every case here except the optimality check, which both
-// must satisfy for the same reason (an admissible, consistent heuristic —
-// including the trivial zero heuristic — guarantees an optimal result).
-
 #include <memory>
 #include <atomic>
 
@@ -109,8 +89,7 @@ TYPED_TEST(GridSearchPlannerTest, ThrowsWhenGoalUnreachable)
 {
   this->configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, false});
   auto * costmap = this->costmap_ros_->getCostmap();
-  // Fully sealed ring around a goal that is itself still free: the search
-  // must exhaust its open set and report failure, not just reject the goal.
+
   amr_planner_plugins_test::sealBoxAround(costmap, 5.0, 5.0, 0.3);
 
   auto start = makePose(1.0, 1.0);
@@ -161,7 +140,7 @@ TYPED_TEST(GridSearchPlannerTest, HandlesStartEqualsGoal)
 
 TYPED_TEST(GridSearchPlannerTest, AllUnknownCostmapSucceedsWhenAllowUnknownTrue)
 {
-  this->configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, true}, /*allow_unknown=*/ true);
+  this->configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, true},   true);
   auto start = makePose(1.0, 1.0);
   auto goal = makePose(9.0, 9.0);
   EXPECT_NO_THROW(this->planner_.createPlan(start, goal));
@@ -169,11 +148,10 @@ TYPED_TEST(GridSearchPlannerTest, AllUnknownCostmapSucceedsWhenAllowUnknownTrue)
 
 TYPED_TEST(GridSearchPlannerTest, AllUnknownCostmapThrowsWhenAllowUnknownFalse)
 {
-  this->configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, true}, /*allow_unknown=*/ false);
+  this->configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, true},   false);
   auto start = makePose(1.0, 1.0);
   auto goal = makePose(9.0, 9.0);
-  // Every cell, including the goal, is NO_INFORMATION here, and
-  // allow_unknown=false means that counts as lethal.
+
   EXPECT_THROW(this->planner_.createPlan(start, goal), nav2_core::PlannerException);
 }
 
@@ -207,11 +185,7 @@ TYPED_TEST(GridSearchPlannerTest, ReturnsProvablyOptimalPathCostOnFreeCostmap)
   ASSERT_NO_THROW(path = this->planner_.createPlan(start, goal));
   double actual_cost = amr_planner_plugins_test::pathLength(path);
 
-  // Free costmap => traversalCost's cost_weight term is zero everywhere, so
-  // the returned path's cost is pure geometric length: this must match the
-  // closed-form optimum exactly (up to floating-point rounding), regardless
-  // of which of the two admissible/consistent heuristics found it.
   EXPECT_NEAR(actual_cost, expected_cost, 1e-9);
 }
 
-}  // namespace
+}

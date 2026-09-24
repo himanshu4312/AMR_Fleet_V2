@@ -13,6 +13,7 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(nav2_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
+find_package(nav2_controller REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -22,21 +23,23 @@ include_directories(include)
 
 set(library_name amr_planner_plugins)
 set(dependencies rclcpp rclcpp_lifecycle nav2_core nav2_costmap_2d nav2_util
-                  nav_msgs geometry_msgs tf2_ros pluginlib)
+                  nav2_controller nav_msgs geometry_msgs tf2_ros pluginlib)
 
 add_library(${library_name} SHARED
   src/grid_search_planner.cpp
   src/astar_planner.cpp
   src/dijkstra_planner.cpp
   src/rrt_planner.cpp
+  src/guarded_goal_checker.cpp
 )
 ament_target_dependencies(${library_name} ${dependencies})
 pluginlib_export_plugin_description_file(nav2_core global_planner_plugin.xml)
+pluginlib_export_plugin_description_file(nav2_core goal_checker_plugin.xml)
 
 install(TARGETS ${library_name}
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(DIRECTORY include/ DESTINATION include/)
-install(FILES global_planner_plugin.xml DESTINATION share/${PROJECT_NAME})
+install(FILES global_planner_plugin.xml goal_checker_plugin.xml DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

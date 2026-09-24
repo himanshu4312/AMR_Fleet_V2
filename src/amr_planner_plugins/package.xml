@@ -13,6 +13,7 @@
   <depend>nav2_core</depend>
   <depend>nav2_costmap_2d</depend>
   <depend>nav2_util</depend>
+  <depend>nav2_controller</depend>
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>tf2_ros</depend>
@@ -25,5 +26,6 @@
   <export>
     <build_type>ament_cmake</build_type>
     <nav2_core plugin="${prefix}/global_planner_plugin.xml" />
+    <nav2_core plugin="${prefix}/goal_checker_plugin.xml" />
   </export>
 </package>  

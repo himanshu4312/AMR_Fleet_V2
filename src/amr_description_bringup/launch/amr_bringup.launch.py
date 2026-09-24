@@ -1,5 +1,3 @@
-#   !/usr/bin/env python3
-
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -16,13 +14,13 @@ def generate_launch_description():
 
     urdf_path = os.path.join(
         pkg_amr_description, 'urdf', 'amr_body.urdf.xacro.xml')
-    
+
     rviz_config_path = os.path.join(
         pkg_amr_description_bringup, 'rviz', 'rviz_config_1.rviz')
-    
+
     world_path = os.path.join(
         pkg_amr_description, 'world', 'maze.sdf')
-    
+
     gazebo_bridge_config_path = os.path.join(
         pkg_amr_description_bringup, 'config', 'gazebo_bridge.yaml')
 
@@ -62,7 +60,7 @@ def generate_launch_description():
         output='screen',
         arguments=[
             '-topic', 'robot_description',
-            '-name', 'amr',          # was 'autobot'
+            '-name', 'amr',
             '-x', '0.0', '-y', '0.0', '-z', '0.0',
         ]
     )

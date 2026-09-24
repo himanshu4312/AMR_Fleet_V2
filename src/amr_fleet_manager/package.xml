@@ -8,9 +8,12 @@
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
+  <depend>action_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>nav2_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>std_srvs</depend>
   <depend>amr_fleet_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>

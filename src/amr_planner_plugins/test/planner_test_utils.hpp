@@ -1,17 +1,3 @@
-// Copyright 2026 Himanshu
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #ifndef PLANNER_TEST_UTILS_HPP_
 #define PLANNER_TEST_UTILS_HPP_
 
@@ -29,9 +15,6 @@
 #include "nav_msgs/msg/path.hpp"
 #include "amr_planner_plugins/costmap_cost_utils.hpp"
 
-// Shared helpers for building a headless Costmap2DROS (no Gazebo/Nav2
-// bringup needed) and for independently verifying planner output, reused
-// across the GTest suite and the benchmark harness.
 namespace amr_planner_plugins_test
 {
 
@@ -50,8 +33,6 @@ inline std::shared_ptr<nav2_costmap_2d::Costmap2DROS> makeTestCostmap(
 {
   auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(node_name);
 
-  // No layer plugins: the master grid is only ever touched by the test, so
-  // hand-placed obstacles can't be overwritten by a layer update.
   costmap_ros->set_parameter(rclcpp::Parameter("plugins", std::vector<std::string>{}));
   costmap_ros->set_parameter(rclcpp::Parameter("global_frame", std::string("map")));
   costmap_ros->set_parameter(rclcpp::Parameter("robot_base_frame", std::string("base_link")));
@@ -64,8 +45,6 @@ inline std::shared_ptr<nav2_costmap_2d::Costmap2DROS> makeTestCostmap(
   costmap_ros->set_parameter(rclcpp::Parameter("track_unknown_space", opts.track_unknown_space));
   costmap_ros->set_parameter(rclcpp::Parameter("use_sim_time", false));
 
-  // Deliberately not calling on_activate(): the GlobalPlanner interface only
-  // needs getCostmap()/getGlobalFrameID(), both available after configure.
   costmap_ros->on_configure(rclcpp_lifecycle::State());
   return costmap_ros;
 }
@@ -80,10 +59,6 @@ inline geometry_msgs::msg::PoseStamped makePose(double x, double y)
   return pose;
 }
 
-// Straight-line collision check sampled at half the costmap resolution,
-// using the exact same "what's blocked" rule the planners themselves use
-// (amr_planner_plugins::isLethalCost) — this lets tests verify a path
-// independently, without reaching into any planner's private methods.
 inline bool segmentIsCollisionFree(
   nav2_costmap_2d::Costmap2D * costmap, double x0, double y0, double x1, double y1,
   bool allow_unknown)
@@ -120,10 +95,6 @@ inline bool pathIsCollisionFree(
   return true;
 }
 
-// Closed-form minimum cost of an 8-connected path between two grid cells on
-// a free costmap (straight step = resolution, diagonal step =
-// resolution*sqrt(2)) — the same formula AStarPlanner uses as its heuristic.
-// Used to verify A*/Dijkstra return a truly optimal path, not just "a" path.
 inline double octileDistance(int dx, int dy, double resolution)
 {
   dx = std::abs(dx);
@@ -142,9 +113,6 @@ inline double pathLength(const nav_msgs::msg::Path & path)
   return total;
 }
 
-// Vertical wall of lethal cells at world-x `wall_x`, leaving gaps below
-// `gap_before` and above `height_m - gap_after` (in meters) so a path around
-// it must exist.
 inline void addWallWithGaps(
   nav2_costmap_2d::Costmap2D * costmap, double wall_x, double gap_before, double gap_after)
 {
@@ -161,9 +129,6 @@ inline void addWallWithGaps(
   }
 }
 
-// Seals a rectangular ring of lethal cells around a world point so nothing
-// outside it can reach the (still-free) center — used for the
-// goal-unreachable test, distinct from the goal-cell-itself-lethal test.
 inline void sealBoxAround(
   nav2_costmap_2d::Costmap2D * costmap, double cx, double cy, double half_size)
 {
@@ -179,6 +144,6 @@ inline void sealBoxAround(
   }
 }
 
-}  // namespace amr_planner_plugins_test
+}
 
-#endif  // PLANNER_TEST_UTILS_HPP_
+#endif

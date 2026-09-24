@@ -1,25 +1,3 @@
-// Copyright 2026 Himanshu
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// Benchmark harness (not a gtest): runs all three planners, through the
-// same nav2_core::GlobalPlanner Strategy interface, against a fixed set of
-// scenarios, and reports planning time / path length / success rate per
-// algorithm. This is what backs the benchmark table in the README — its
-// output is captured verbatim, not hand-typed.
-//
-// Run with: ./build/amr_planner_plugins/benchmark_planners
-
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -60,9 +38,6 @@ std::string plannerKindName(PlannerKind kind)
   return "?";
 }
 
-// Constructed and used purely through nav2_core::GlobalPlanner (the
-// Strategy interface) — the benchmark loop below never knows which concrete
-// algorithm it's timing.
 nav2_core::GlobalPlanner::Ptr makePlanner(PlannerKind kind)
 {
   switch (kind) {
@@ -100,10 +75,6 @@ TrialResult runTrial(PlannerKind kind, const Scenario & scenario, int trial_inde
     scenario.build_obstacles(costmap);
   }
 
-  // Every other parameter is left at each planner's real production default
-  // (matching nav2_params.yaml) — only RRT's rng_seed is pinned, and only so
-  // this benchmark's own output is reproducible run to run, not to tune
-  // RRT's behavior favorably.
   if (kind == PlannerKind::kRRT) {
     costmap_ros->declare_parameter(
       "bench.rng_seed", rclcpp::ParameterValue(1000 + trial_index));
@@ -153,7 +124,7 @@ std::vector<Scenario> buildScenarios()
     s.start = makePose(1.0, 5.0);
     s.goal = makePose(19.0, 5.0);
     s.build_obstacles = [](nav2_costmap_2d::Costmap2D * costmap) {
-        // Two walls spanning x in [3,17], leaving a 0.5m gap centered at y=5.
+
         unsigned int x0_mx, x1_mx, dummy_my;
         if (!costmap->worldToMap(3.0, 0.0, x0_mx, dummy_my)) {return;}
         if (!costmap->worldToMap(17.0, 0.0, x1_mx, dummy_my)) {return;}
@@ -177,8 +148,7 @@ std::vector<Scenario> buildScenarios()
     s.start = makePose(1.0, 1.0);
     s.goal = makePose(19.0, 19.0);
     s.build_obstacles = [](nav2_costmap_2d::Costmap2D * costmap) {
-        // Four walls forcing a serpentine path, alternating a narrow 0.6m
-        // gap between the top and bottom of the map each time.
+
         const double xs[] = {4.0, 8.0, 12.0, 16.0};
         const double kGap = 0.6;
         bool gap_at_top = true;
@@ -221,7 +191,7 @@ struct Aggregate
   double total_length{0.0};
 };
 
-}  // namespace
+}
 
 int main(int argc, char ** argv)
 {
@@ -242,8 +212,7 @@ int main(int argc, char ** argv)
 
   for (const auto & scenario : scenarios) {
     for (auto kind : kinds) {
-      // Grid search is deterministic — one trial is enough. RRT is
-      // randomized, so average over several seeded trials.
+
       int trial_count = (kind == PlannerKind::kRRT) ? 10 : 1;
 
       Aggregate agg;

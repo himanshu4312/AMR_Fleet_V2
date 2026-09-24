@@ -1,17 +1,3 @@
-// Copyright 2026 Himanshu
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include "amr_planner_plugins/grid_search_planner.hpp"
 
 #include <cmath>
@@ -120,18 +106,6 @@ nav_msgs::msg::Path GridSearchPlanner::createPlan(
   return path;
 }
 
-// Best-first grid search over an 8-connected costmap grid. This is the one
-// piece of code AStarPlanner and DijkstraPlanner share: both push cells into
-// `open_set` ordered by g_cost (accumulated cost from start) + heuristic(),
-// and both accept the first pop of the goal cell as optimal — that's only
-// true because heuristic() is required to be admissible (never overestimates
-// the true remaining cost) and consistent (h(a) <= cost(a,b) + h(b) for every
-// edge a->b). AStarPlanner's octile-distance heuristic satisfies both;
-// DijkstraPlanner's heuristic() returning a constant 0 trivially satisfies
-// both too, which is exactly what turns this into plain Dijkstra: with no
-// lookahead, cells are expanded strictly in order of distance from the
-// start, so it explores a growing "circle" instead of A*'s goal-directed
-// cone, but is still provably optimal for the same reason.
 bool GridSearchPlanner::searchPath(
   const CellIndex & start_cell, const CellIndex & goal_cell,
   std::vector<CellIndex> & result_path)
@@ -148,7 +122,7 @@ bool GridSearchPlanner::searchPath(
     CellIndex current = open_set.top().index;
     open_set.pop();
 
-    if (closed[current]) {continue;}  // stale entry, cheaper path already processed it
+    if (closed[current]) {continue;}
     closed[current] = true;
 
     if (current == goal_cell) {
@@ -188,8 +162,6 @@ double GridSearchPlanner::traversalCost(const CellIndex & from, const CellIndex 
     static_cast<unsigned int>(to.x), static_cast<unsigned int>(to.y));
   double normalized_cost = static_cast<double>(cost_value) / 255.0;
 
-  // Folding inflation cost into edge weight biases the search toward corridor
-  // centers instead of skimming obstacle edges.
   return base_cost * (1.0 + cost_weight_ * normalized_cost);
 }
 
@@ -221,4 +193,4 @@ bool GridSearchPlanner::isLethal(const CellIndex & idx) const
   return isLethalCost(cost, allow_unknown_);
 }
 
-}  // namespace amr_planner_plugins
+}

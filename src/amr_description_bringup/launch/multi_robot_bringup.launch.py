@@ -1,23 +1,11 @@
 #!/usr/bin/env python3
-"""
-Multi-robot bringup: two independent AMR instances (robot1, robot2) sharing
-one Gazebo (Ignition Fortress) world and one static map, each running its own
-completely separate Nav2 stack under its own ROS namespace.
-
-There is deliberately NO coordination logic between the two robots at this
-stage - each Nav2 stack is unaware the other robot exists. This file only
-proves the multi-robot plumbing (namespacing, TF, bridging, per-robot
-localization/navigation) works.
-
-Does NOT modify or replace amr_bringup.launch.py, nav2_bringup.launch.py or
-slam.launch.py, which remain the single-robot entry points.
-"""
 
 import os
-
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration, PythonExpression
@@ -26,13 +14,6 @@ from launch_ros.descriptions import ParameterFile
 from launch_ros.parameter_descriptions import ParameterValue
 from nav2_common.launch import RewrittenYaml
 
-# Spawn poses inside src/amr_description/world/maze.sdf, chosen by scanning
-# maps/maze_map_v3.yaml for cells with clearance from the nearest
-# wall/obstacle, each >6m from every other robot's spawn: robot1 sits in the
-# open room near the top-left of the maze (~2m+ clearance), robot2 in the
-# open room near the bottom-right (~2m+ clearance), robot3 and robot4 in two
-# separate clear rooms near the middle-right of the maze (~2m clearance
-# each), all four >7.5m apart from one another.
 ROBOTS = [
     {'name': 'robot1', 'x': '-12.2', 'y': '9.95', 'yaw': '0.0'},
     {'name': 'robot2', 'x': '2.65', 'y': '-13.3', 'yaw': '0.0'},
@@ -40,7 +21,8 @@ ROBOTS = [
     {'name': 'robot4', 'x': '3.90', 'y': '-5.85', 'yaw': '0.0'},
 ]
 
-WORLD_NAME = 'empty'  # <world name='empty'> in maze.sdf
+WORLD_NAME = 'empty'
+ROBOT_STAGGER_DELAY_S = 6.0
 
 
 def make_robot_group(robot, urdf_path, nav2_params_path, pkg_nav2_bringup, use_sim_time):
@@ -81,12 +63,6 @@ def make_robot_group(robot, urdf_path, nav2_params_path, pkg_nav2_bringup, use_s
         ],
     )
 
-    # Each robot's DiffDrive/lidar plugins (amr_gazebo.xacro, lidar.xacro)
-    # publish on gz topics named /<robot_name>/scan, /<robot_name>/odom,
-    # /<robot_name>/tf and /<robot_name>/cmd_vel (set via the robot_name
-    # xacro arg), plus the fixed gz-sim joint_state topic path. Bridge each
-    # robot's topics with its own parameter_bridge instance so nothing from
-    # robot1 ever reaches robot2's topics.
     gz_joint_state_topic = f'/world/{WORLD_NAME}/model/{name}/joint_state'
     bridge_node = Node(
         package='ros_gz_bridge',
@@ -105,36 +81,18 @@ def make_robot_group(robot, urdf_path, nav2_params_path, pkg_nav2_bringup, use_s
         remappings=[(gz_joint_state_topic, f'/{name}/joint_states')],
     )
 
-    # Per-robot parameter overrides layered on top of the shared
-    # nav2_params.yaml: frame ids and topics get the robot's namespace
-    # prefix; the "map" frame and map_server stay shared/untouched.
     param_rewrites = {
-        # AMCL (amcl.ros__parameters.*)
         'base_frame_id': f'{name}/base_link',
         'odom_frame_id': f'{name}/odom',
         'scan_topic': f'/{name}/scan',
-        # shared leaf keys used identically by bt_navigator / costmaps / behavior_server
         'robot_base_frame': f'{name}/base_link',
         'odom_topic': f'/{name}/odom',
         'topic': f'/{name}/scan',
-        # local costmap and behavior_server operate in the robot's own odom
-        # frame - global costmap and bt_navigator keep the shared "map" frame
         'local_costmap.local_costmap.ros__parameters.global_frame': f'{name}/odom',
         'behavior_server.ros__parameters.global_frame': f'{name}/odom',
-        # nav2_costmap_2d's StaticLayer resolves map_topic to an absolute
-        # namespaced path internally (e.g. "/robot1/map") before subscribing,
-        # bypassing normal remap-rule resolution - a plain SetRemap('map',
-        # '/map') has no effect on it. Point it at the shared map_server's
-        # "/map" directly via its own parameter instead.
         'global_costmap.global_costmap.ros__parameters.static_layer.map_topic': '/map',
     }
 
-    # root_key=name wraps the rewritten YAML so its top-level keys become
-    # "<name>: {amcl: ..., bt_navigator: ...}", matching the fully-qualified
-    # "/<name>/amcl" node name. Without this, --params-file's un-namespaced
-    # "amcl:" key never matches the namespaced node and every override here
-    # is silently ignored (nav2_bringup's own launch files rely on the same
-    # root_key=namespace trick for exactly this reason).
     robot_params = RewrittenYaml(
         source_file=nav2_params_path,
         root_key=name,
@@ -148,14 +106,12 @@ def make_robot_group(robot, urdf_path, nav2_params_path, pkg_nav2_bringup, use_s
         name='amcl',
         namespace=name,
         output='screen',
+        respawn=True,
+        respawn_delay=2.0,
         parameters=[
             ParameterFile(robot_params, allow_substs=True),
             {
                 'use_sim_time': use_sim_time,
-                # RewrittenYaml can only override keys that already exist in
-                # nav2_params.yaml, and set_initial_pose/initial_pose.* are
-                # not in it, so seed AMCL's initial pose here directly -
-                # otherwise it starts hunting from (0,0) in the shared map.
                 'set_initial_pose': True,
                 'initial_pose.x': float(x),
                 'initial_pose.y': float(y),
@@ -163,11 +119,7 @@ def make_robot_group(robot, urdf_path, nav2_params_path, pkg_nav2_bringup, use_s
                 'initial_pose.yaw': float(yaw),
             },
         ],
-        # amcl's map_topic defaults to relative "map", which under this
-        # node's namespace would resolve to "/robot1/map" - but the single
-        # shared map_server (see generate_launch_description) publishes on
-        # the global, unnamespaced "/map". Remap explicitly so both robots'
-        # amcl subscribe to that one shared topic.
+
         remappings=tf_remap + [('map', '/map')],
     )
 
@@ -184,37 +136,21 @@ def make_robot_group(robot, urdf_path, nav2_params_path, pkg_nav2_bringup, use_s
         }],
     )
 
-    # Plain (non-composed) Nav2 navigation stack: planner_server,
-    # controller_server, smoother_server, behavior_server, bt_navigator,
-    # waypoint_follower, velocity_smoother + its own lifecycle manager.
-    # use_composition is explicitly 'False' - Humble has a known bug where
-    # namespace propagation breaks for nested costmap paths under composable
-    # container nodes.
     navigation_group = GroupAction([
         PushRosNamespace(name),
-        # planner_server's global_costmap static_layer subscribes to the
-        # relative "map" topic by default, which under this namespace would
-        # resolve to "/robot1/map" - remap it to the shared, unnamespaced
-        # map_server's "/map" topic (same reasoning as amcl's map remap
-        # above). SetRemap applies to every node launched within this scope,
-        # including navigation_launch.py's, which we can't edit directly.
         SetRemap(src='map', dst='/map'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(pkg_nav2_bringup, 'launch', 'navigation_launch.py')
             ),
-            # namespace is deliberately NOT passed here: navigation_launch.py
-            # applies its own root_key=namespace wrap around params_file, and
-            # our params_file (robot_params) is already root_key=name wrapped
-            # above - passing the same namespace again would double-wrap it
-            # (e.g. {robot1: {robot1: {...}}}) and break node-name matching.
-            # PushRosNamespace(name) above already namespaces every node here.
+
             launch_arguments={
                 'use_sim_time': use_sim_time,
                 'autostart': 'true',
                 'params_file': robot_params,
                 'use_composition': 'False',
                 'container_name': 'nav2_container',
+                'use_respawn': 'true',
             }.items(),
         ),
     ])
@@ -276,7 +212,6 @@ def generate_launch_description():
         arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
     )
 
-    # ONE shared map_server for both robots, "map" frame is global/shared.
     map_server_node = Node(
         package='nav2_map_server',
         executable='map_server',
@@ -316,13 +251,6 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # RViz's TF/RobotModel displays only listen on the plain, unnamespaced
-    # /tf and /tf_static - but each robot's frames live on its own
-    # /<robot_name>/tf(_static) topic by design (see make_robot_group). This
-    # relay mirrors both robots' TF onto the shared topics purely so generic
-    # tools (RViz, rqt_tf_tree, ...) can see everything in one place; Nav2/
-    # AMCL keep using the per-robot topics directly and are unaffected.
-    # Every frame name is namespace-prefixed, so merging is collision-free.
     tf_merge_relay_node = Node(
         package='amr_description_bringup',
         executable='tf_merge_relay.py',
@@ -333,8 +261,12 @@ def generate_launch_description():
     )
 
     robot_groups = [
-        make_robot_group(robot, urdf_path, nav2_params_path, pkg_nav2_bringup, use_sim_time)
-        for robot in ROBOTS
+        TimerAction(
+            period=idx * ROBOT_STAGGER_DELAY_S,
+            actions=[make_robot_group(
+                robot, urdf_path, nav2_params_path, pkg_nav2_bringup, use_sim_time)],
+        )
+        for idx, robot in enumerate(ROBOTS)
     ]
 
     return LaunchDescription([

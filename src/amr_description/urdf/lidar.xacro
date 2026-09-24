@@ -10,12 +10,9 @@
       <material name="transparent" />
     </visual>
 
-    <!--Inertial Tag-->
     <xacro:box_inertia m="0.16" l="0.06" w="0.06" h="0.08"
                         xyz="0 0 0" rpy="0 0 0" />
   </link>
-
-  <!-- ===== JOINT: attach to amr_body ===== -->
 
   <joint name="${prefix_}lidar_joint" type="fixed">
     <parent link="${prefix_}amr_body"/>

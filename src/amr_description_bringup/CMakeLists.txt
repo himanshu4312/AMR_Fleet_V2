@@ -5,14 +5,13 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
 find_package(ament_cmake REQUIRED)
 install(
   DIRECTORY launch config maps rviz
   DESTINATION share/${PROJECT_NAME}
 )
 install(
-  PROGRAMS scripts/tf_merge_relay.py
+  PROGRAMS scripts/tf_merge_relay.py scripts/send_staggered_goals.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 

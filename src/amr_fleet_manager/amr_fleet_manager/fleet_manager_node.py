@@ -1,9 +1,13 @@
 import math
+import subprocess
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
 
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from action_msgs.msg import GoalStatus, GoalStatusArray
+from geometry_msgs.msg import PolygonStamped, PoseStamped, PoseWithCovarianceStamped
+from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Path
 from nav2_msgs.msg import SpeedLimit
 
@@ -11,44 +15,50 @@ from amr_fleet_msgs.msg import FleetRobotState
 
 DEFAULT_ROBOT_NAMES = ['robot1', 'robot2', 'robot3', 'robot4']
 
-# _update_conflicts already checks every pair of robots (not just a single
-# fixed pair), so no logic changes were needed to go from 2 to 4 robots -
-# only this list and the spawn poses in multi_robot_bringup.launch.py.
 
-# nav2_params.yaml sets costmap robot_radius: 0.22m for both robots ->
-# footprint (touching) diameter 0.44m. Safety distance = diameter + ~0.16m
-# margin (AMCL localization noise + reaction time), rounded to 0.6m.
-# Tightened down from an initial 1.0m default, which was triggering pauses
-# while robots were still ~3.5m apart - much earlier than "stop when it's
-# actually close".
-DEFAULT_SAFETY_DISTANCE_M = 0.6
+DEFAULT_SAFETY_DISTANCE_M = 2.0
 
-# Two robots' estimated arrival times at the same close point must be within
-# this many seconds of each other, IN ADDITION to being spatially close, to
-# count as a real conflict. See the comment in _pair_has_conflict for why.
-# Tightened from an initial 7.0s so the fleet manager only reacts to
-# genuinely imminent overlaps, not speculative far-future ones.
 DEFAULT_TIME_WINDOW_S = 4.0
 
-# Nominal cruise speed used only to estimate arrival times, matching
-# controller_server.FollowPath.max_vel_x in nav2_params.yaml (currently
-# identical for both robots, since it's one shared params file).
+TIME_TIE_EPSILON_S = 0.1
+DISTANCE_TIE_EPSILON_M = 0.02
+
 DEFAULT_NOMINAL_SPEED_MPS = 0.26
 
-# Check every Nth waypoint pair instead of every consecutive pair, purely to
-# bound the O(segments_a * segments_b) cost of the per-pair conflict scan on
-# long/dense paths. 1 = check every segment (no downsampling).
 DEFAULT_PATH_CHECK_STRIDE = 1
 
-TIMER_PERIOD_S = 0.5  # ~2 Hz conflict-detection poll rate
+TIMER_PERIOD_S = 0.5
 
-# SpeedLimit.msg defines speed_limit=0.0 (with percentage=True) as "no
-# limit" - i.e. the CLEAR/resume value, not "stop". A paused robot is
-# instead given a 1% speed limit, which is effectively stopped for our
-# purposes without relying on the special zero value. See the comment at
-# _publish_speed_limit for why getting this backwards would be easy.
 PAUSE_SPEED_LIMIT_PERCENT = 1.0
 RESUME_SPEED_LIMIT_PERCENT = 0.0
+
+FALSE_SUCCESS_TOLERANCE_M = 0.75
+
+MAX_AUTO_RESEND_ATTEMPTS = 3
+
+MAX_CONTROLLER_RESTART_ATTEMPTS = 2
+
+RESEND_DELAY_S = 3.0
+
+RESEND_RETRY_PERIOD_S = 5.0
+RESEND_RETRY_LIMIT = 24
+
+NAVIGATING_STATUSES = (
+    GoalStatus.STATUS_ACCEPTED,
+    GoalStatus.STATUS_EXECUTING,
+    GoalStatus.STATUS_CANCELING,
+)
+
+RESTART_COOLDOWN_S = 20.0
+
+COSTMAP_STALE_THRESHOLD_S = 12.0
+
+FROZEN_RESTART_COOLDOWN_S = 45.0
+MAX_FROZEN_RESTARTS = 3
+
+CLOCK_MISMATCH_AGE_S = 1.0e6
+
+HEALTHY_RESET_S = 90.0
 
 
 def _dist(p, q):
@@ -60,19 +70,6 @@ def _clamp01(x):
 
 
 def _closest_pt_segment_segment(p1, p2, q1, q2):
-    """
-    Minimum distance between 2D segments p1-p2 and q1-q2, plus where along
-    each segment (as a 0..1 fraction) that closest approach occurs.
-
-    Standard clamped-parametric segment/segment closest-point algorithm
-    (e.g. Ericson, "Real-Time Collision Detection", ClosestPtSegmentSegment)
-    - needed because two segments can cross (or pass close) at a point that
-    isn't near either segment's endpoints, so checking only endpoint-to-
-    segment distances would miss real crossings.
-
-    Returns (min_distance, s, t) where s/t in [0, 1] locate the closest
-    point along p1->p2 and q1->q2 respectively.
-    """
     d1x, d1y = p2[0] - p1[0], p2[1] - p1[1]
     d2x, d2y = q2[0] - q1[0], q2[1] - q1[1]
     rx, ry = p1[0] - q1[0], p1[1] - q1[1]
@@ -110,13 +107,22 @@ def _closest_pt_segment_segment(p1, p2, q1, q2):
 
 
 class RobotTrack:
-    """Everything the fleet manager currently knows about one robot."""
 
     def __init__(self, name):
         self.name = name
-        self.pose = None       # geometry_msgs/PoseStamped, from /<name>/amcl_pose
-        self.points = []       # list[(x, y)], from latest /<name>/plan
-        self.cumulative = []   # cumulative path distance up to points[i], same length as points
+        self.pose = None
+        self.points = []
+        self.cumulative = []
+        self.last_goal_pose = None
+        self.last_reacted_goal_id = None
+        self.false_success_streak = 0
+        self.controller_restart_count = 0
+        self.is_navigating = None
+        self.last_status = None
+        self.footprint_stamp_s = None
+        self.footprint_ignore_before_s = 0.0
+        self.last_frozen_restart_s = None
+        self.frozen_restart_count = 0
 
     @property
     def remaining_path_length(self):
@@ -132,6 +138,8 @@ class RobotTrack:
             cumulative.append(total)
         self.points = points
         self.cumulative = cumulative
+        if path_msg.poses:
+            self.last_goal_pose = path_msg.poses[-1]
 
 
 class FleetManagerNode(Node):
@@ -152,15 +160,12 @@ class FleetManagerNode(Node):
         self.path_check_stride = max(1, int(self.get_parameter('path_check_stride').value))
 
         self.tracks = {name: RobotTrack(name) for name in self.robot_names}
+        self._warned_clock_mismatch = False
 
-        # Active conflict episodes: key = tuple(sorted((robot_a, robot_b))),
-        # value = name of the robot that lost priority and is paused for
-        # THIS episode. The winner/loser decision is made once, when the
-        # episode starts, and deliberately not re-evaluated on every tick
-        # while conflict_now stays True for that pair - see _update_conflicts.
         self.active_conflicts = {}
 
         self.speed_limit_pubs = {}
+        self.nav_action_clients = {}
         for name in self.robot_names:
             self.speed_limit_pubs[name] = self.create_publisher(
                 SpeedLimit, f'/{name}/speed_limit', 10)
@@ -168,11 +173,17 @@ class FleetManagerNode(Node):
                 Path, f'/{name}/plan', self._plan_callback(name), 10)
             self.create_subscription(
                 PoseWithCovarianceStamped, f'/{name}/amcl_pose', self._pose_callback(name), 10)
+            self.create_subscription(
+                PolygonStamped, f'/{name}/local_costmap/published_footprint',
+                self._footprint_callback(name), 10)
+            self.create_subscription(
+                GoalStatusArray, f'/{name}/navigate_to_pose/_action/status',
+                self._goal_status_callback(name), 10)
+            self.nav_action_clients[name] = ActionClient(
+                self, NavigateToPose, f'/{name}/navigate_to_pose')
 
         self.state_pub = self.create_publisher(FleetRobotState, '/fleet_manager/robot_states', 10)
 
-        # Explicitly clear every robot's speed limit at startup so nobody is
-        # left paused from a previous fleet_manager run.
         for name in self.robot_names:
             self._publish_speed_limit(name, resume=True)
 
@@ -183,7 +194,6 @@ class FleetManagerNode(Node):
             f'time_window={self.time_window_s}s, '
             f'nominal_speed={self.nominal_speed_mps}m/s')
 
-    # --- subscriptions -----------------------------------------------------
 
     def _plan_callback(self, name):
         def cb(msg: Path):
@@ -198,9 +208,171 @@ class FleetManagerNode(Node):
             self.tracks[name].pose = pose
         return cb
 
-    # --- main loop -----------------------------------------------------
+    def _footprint_callback(self, name):
+        def cb(msg: PolygonStamped):
+            stamp = msg.header.stamp
+            stamp_s = stamp.sec + stamp.nanosec * 1e-9
+            track = self.tracks[name]
+            if stamp_s < track.footprint_ignore_before_s:
+                return
+            track.footprint_stamp_s = stamp_s
+        return cb
+
+    def _goal_status_callback(self, name):
+        def cb(msg: GoalStatusArray):
+            if not msg.status_list:
+                return
+            track = self.tracks[name]
+            navigating_now = any(
+                s.status in NAVIGATING_STATUSES for s in msg.status_list)
+            if navigating_now and track.is_navigating is False:
+                track.points = []
+                track.cumulative = []
+            track.is_navigating = navigating_now
+            track.last_status = msg.status_list[-1].status
+
+            latest = msg.status_list[-1]
+            if latest.status != GoalStatus.STATUS_SUCCEEDED:
+                return
+            goal_id = bytes(latest.goal_info.goal_id.uuid)
+            if goal_id == track.last_reacted_goal_id:
+                return
+            track.last_reacted_goal_id = goal_id
+            self._verify_goal_reached(name)
+        return cb
+
+
+    def _verify_goal_reached(self, name):
+        track = self.tracks[name]
+        if track.pose is None or track.last_goal_pose is None:
+            return
+
+        actual = track.pose.pose.position
+        goal = track.last_goal_pose.pose.position
+        error_m = _dist((actual.x, actual.y), (goal.x, goal.y))
+
+        if error_m <= FALSE_SUCCESS_TOLERANCE_M:
+            track.false_success_streak = 0
+            track.controller_restart_count = 0
+            track.frozen_restart_count = 0
+            return
+
+        if track.false_success_streak >= MAX_AUTO_RESEND_ATTEMPTS:
+            track.false_success_streak = 0
+            if track.controller_restart_count >= MAX_CONTROLLER_RESTART_ATTEMPTS:
+                self.get_logger().error(
+                    f'{name}: still false-succeeding {error_m:.2f}m from its '
+                    f'goal after {track.controller_restart_count} '
+                    f'controller_server restart(s) - giving up. This robot '
+                    f'needs manual investigation.')
+                return
+            track.controller_restart_count += 1
+            self.get_logger().error(
+                f'{name}: {MAX_AUTO_RESEND_ATTEMPTS} resends to the same '
+                f'controller_server process all failed identically - it is '
+                f'likely permanently corrupted (not an AMCL/TF issue, which '
+                f'a resend would have fixed). Restarting its process '
+                f'(attempt {track.controller_restart_count}/'
+                f'{MAX_CONTROLLER_RESTART_ATTEMPTS}).')
+            self._restart_controller_server(name)
+            return
+
+        track.false_success_streak += 1
+        self.get_logger().warn(
+            f'{name}: reported SUCCEEDED but is {error_m:.2f}m from its goal '
+            f'(tolerance {FALSE_SUCCESS_TOLERANCE_M}m) - likely the stale-TF '
+            f'false-success defect, not a real arrival. Re-sending the same '
+            f'goal in {RESEND_DELAY_S}s '
+            f'(attempt {track.false_success_streak}/{MAX_AUTO_RESEND_ATTEMPTS}).')
+        self._schedule_resend(name, RESEND_DELAY_S)
+
+    def _check_controller_health(self):
+        now_s = self.get_clock().now().nanoseconds / 1e9
+        for name in self.robot_names:
+            track = self.tracks[name]
+            if track.footprint_stamp_s is None:
+                continue
+            if track.last_frozen_restart_s is not None \
+                    and now_s - track.last_frozen_restart_s < FROZEN_RESTART_COOLDOWN_S:
+                continue
+            age_s = now_s - track.footprint_stamp_s
+            if age_s > CLOCK_MISMATCH_AGE_S:
+                if not self._warned_clock_mismatch:
+                    self._warned_clock_mismatch = True
+                    self.get_logger().error(
+                        'costmap footprint stamps are on a different clock '
+                        'than this node (age > 1e6 s). Start this node with '
+                        '`--ros-args -p use_sim_time:=true`. Controller '
+                        'health monitoring is DISABLED until then.')
+                return
+            if age_s < COSTMAP_STALE_THRESHOLD_S:
+                if track.frozen_restart_count \
+                        and track.last_frozen_restart_s is not None \
+                        and now_s - track.last_frozen_restart_s > HEALTHY_RESET_S:
+                    track.frozen_restart_count = 0
+                continue
+
+            if track.frozen_restart_count >= MAX_FROZEN_RESTARTS:
+                track.last_frozen_restart_s = now_s
+                self.get_logger().error(
+                    f'{name}: controller_server looks frozen again (local '
+                    f'costmap footprint {age_s:.0f}s old) after '
+                    f'{track.frozen_restart_count} restart(s) - giving up. '
+                    f'This robot needs manual investigation.')
+                continue
+
+            resume = track.is_navigating or track.last_status == GoalStatus.STATUS_ABORTED
+            resume = bool(resume) and track.last_goal_pose is not None
+            track.frozen_restart_count += 1
+            track.last_frozen_restart_s = now_s
+            self.get_logger().error(
+                f'{name}: controller_server appears frozen - its local '
+                f'costmap footprint is {age_s:.0f}s old (threshold '
+                f'{COSTMAP_STALE_THRESHOLD_S:.0f}s) while AMCL/TF are '
+                f'healthy. Restarting it '
+                f'(attempt {track.frozen_restart_count}/{MAX_FROZEN_RESTARTS})'
+                f'{" and re-sending the goal" if resume else ""}.')
+            self._restart_controller_server(name, resend=resume)
+
+    def _restart_controller_server(self, name, resend=True):
+        pattern = f'nav2_controller/controller_server .*__ns:=/{name} '
+        subprocess.run(['pkill', '-9', '-f', pattern], check=False)
+        self.tracks[name].last_frozen_restart_s = self.get_clock().now().nanoseconds / 1e9
+        self.tracks[name].footprint_stamp_s = None
+        self.tracks[name].footprint_ignore_before_s = \
+            self.get_clock().now().nanoseconds / 1e9
+        if resend:
+            self._schedule_resend(name, RESTART_COOLDOWN_S)
+
+    def _schedule_resend(self, name, delay_s, attempts_left=RESEND_RETRY_LIMIT):
+        box = {}
+
+        def fire():
+            box['timer'].cancel()
+            self._resend_goal(name, attempts_left)
+
+        box['timer'] = self.create_timer(delay_s, fire)
+
+    def _resend_goal(self, name, attempts_left=0):
+        track = self.tracks[name]
+        client = self.nav_action_clients[name]
+        if track.is_navigating:
+            return
+        if not client.server_is_ready():
+            if attempts_left > 0:
+                self._schedule_resend(name, RESEND_RETRY_PERIOD_S, attempts_left - 1)
+            else:
+                self.get_logger().warn(
+                    f'{name}: navigate_to_pose action server still not '
+                    f'available after retrying - giving up on the auto-resend.')
+            return
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose = track.last_goal_pose
+        client.send_goal_async(goal_msg)
+
 
     def on_timer(self):
+        self._check_controller_health()
         self._update_conflicts()
         self._publish_states()
 
@@ -210,43 +382,55 @@ class FleetManagerNode(Node):
             for j in range(i + 1, len(names)):
                 a, b = names[i], names[j]
                 pair_key = tuple(sorted((a, b)))
-                conflict_now = self._pair_has_conflict(a, b)
+                crossing = self._find_conflict_crossing(a, b)
 
                 if pair_key in self.active_conflicts:
-                    if not conflict_now:
+                    if crossing is None:
                         paused_robot = self.active_conflicts.pop(pair_key)
                         self.get_logger().info(
                             f'Conflict cleared between {a} and {b}; resuming {paused_robot}')
-                    # else: conflict still active - keep the existing
-                    # winner/loser assignment, do not re-rank priority.
-                elif conflict_now:
-                    track_a = self.tracks[a]
-                    track_b = self.tracks[b]
-                    # Shorter remaining path keeps moving; the other pauses.
-                    if track_a.remaining_path_length <= track_b.remaining_path_length:
-                        winner, loser = a, b
-                    else:
-                        winner, loser = b, a
+                elif crossing is not None:
+                    dist_a, dist_b, time_a, time_b = crossing
+                    winner, loser, reason = self._decide_priority(
+                        a, dist_a, time_a, b, dist_b, time_b)
                     self.active_conflicts[pair_key] = loser
                     self.get_logger().info(
-                        f'Conflict detected between {a} and {b}: pausing {loser} '
-                        f'(remaining path {self.tracks[loser].remaining_path_length:.2f}m) '
-                        f'while {winner} proceeds '
-                        f'(remaining path {self.tracks[winner].remaining_path_length:.2f}m)')
+                        f'Conflict detected between {a} and {b}: pausing {loser} while '
+                        f'{winner} crosses first ({reason})')
 
-        # Re-publish every robot's current desired speed limit every tick
-        # (not only on state transitions), so a controller_server that
-        # subscribed late, or a dropped message, still converges to the
-        # correct pause/resume state instead of relying on a single publish.
         paused_now = set(self.active_conflicts.values())
         for name in names:
             self._publish_speed_limit(name, resume=(name not in paused_now))
 
-    def _pair_has_conflict(self, name_a, name_b):
+    def _decide_priority(self, name_a, dist_a, time_a, name_b, dist_b, time_b):
+        if abs(time_a - time_b) >= TIME_TIE_EPSILON_S:
+            return (name_a, name_b, 'reaches crossing first') if time_a < time_b \
+                else (name_b, name_a, 'reaches crossing first')
+
+        safe_time_a = time_a - self.safety_distance_m / self.nominal_speed_mps
+        safe_time_b = time_b - self.safety_distance_m / self.nominal_speed_mps
+        if abs(safe_time_a - safe_time_b) >= TIME_TIE_EPSILON_S:
+            reason = 'reaches safe-distance boundary first'
+            return (name_a, name_b, reason) if safe_time_a < safe_time_b \
+                else (name_b, name_a, reason)
+
+        remaining_a = self.tracks[name_a].remaining_path_length
+        remaining_b = self.tracks[name_b].remaining_path_length
+        if abs(remaining_a - remaining_b) >= DISTANCE_TIE_EPSILON_M:
+            return (name_a, name_b, 'closer to its goal') if remaining_a < remaining_b \
+                else (name_b, name_a, 'closer to its goal')
+
+        if self.robot_names.index(name_a) < self.robot_names.index(name_b):
+            return name_a, name_b, 'lower robot number'
+        return name_b, name_a, 'lower robot number'
+
+    def _find_conflict_crossing(self, name_a, name_b):
         track_a = self.tracks[name_a]
         track_b = self.tracks[name_b]
+        if track_a.is_navigating is False or track_b.is_navigating is False:
+            return None
         if len(track_a.points) < 2 or len(track_b.points) < 2:
-            return False
+            return None
 
         stride = self.path_check_stride
         for i in range(0, len(track_a.points) - 1, stride):
@@ -265,44 +449,20 @@ class FleetManagerNode(Node):
                 time_a = dist_a / self.nominal_speed_mps
                 time_b = dist_b / self.nominal_speed_mps
 
-                # Deliberately requiring BOTH spatial closeness AND arrival
-                # times within time_window_s of each other. Two robots'
-                # paths can cross the same physical point in the maze at
-                # very different times - e.g. one robot passes through a
-                # corridor junction long before the other robot ever
-                # reaches it - and that is not a real collision risk.
-                # Flagging every spatial path crossing regardless of timing
-                # would pause robots for crossings that will never actually
-                # coincide, which is both wrong and would make the fleet
-                # manager unusable in a maze with many corridor
-                # intersections. Do NOT "simplify" this to a spatial-only
-                # check - it is intentional.
                 if abs(time_a - time_b) < self.time_window_s:
-                    return True
-        return False
+                    return dist_a, dist_b, time_a, time_b
+        return None
 
     def _publish_speed_limit(self, name, resume: bool):
         msg = SpeedLimit()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
         msg.percentage = True
-        # IMPORTANT: per nav2_msgs/SpeedLimit's own definition, speed_limit
-        # = 0.0 (with percentage=True) means "no limit" - i.e. this is the
-        # CLEAR/resume value, NOT "stop". To pause a robot we instead
-        # publish 1.0 (1% of max speed, effectively stopped) - never 0.0.
-        # Swapping these two constants would make paused robots drive at
-        # full speed and "resumed" robots crawl at 1% forever.
         msg.speed_limit = RESUME_SPEED_LIMIT_PERCENT if resume else PAUSE_SPEED_LIMIT_PERCENT
         self.speed_limit_pubs[name].publish(msg)
 
     def _publish_states(self):
         paused_now = set(self.active_conflicts.values())
-        # priority_rank: 1-indexed rank by remaining path length, ascending
-        # (rank 1 = shortest remaining path = would win any conflict it is
-        # currently part of). This is a general observability ranking,
-        # computed fresh every tick regardless of whether a conflict is
-        # currently active - it is NOT the same thing as active_conflicts,
-        # which only decides real pause/resume actions.
         ranked = sorted(self.robot_names, key=lambda n: self.tracks[n].remaining_path_length)
         rank_of = {name: idx + 1 for idx, name in enumerate(ranked)}
 

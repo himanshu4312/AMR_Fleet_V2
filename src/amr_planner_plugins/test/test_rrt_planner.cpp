@@ -1,24 +1,3 @@
-// Copyright 2026 Himanshu
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// RRT is not optimal by construction (goal-biased random sampling), so
-// unlike the grid-search suite, these tests check collision-free
-// connectivity and endpoint correctness rather than path cost.
-//
-// rng_seed is fixed in every success-path test below so CI is deterministic
-// — see RRTPlanner::configure()'s handling of the rng_seed parameter.
-
 #include <atomic>
 #include <memory>
 #include <string>
@@ -82,10 +61,6 @@ protected:
     }
   }
 
-  // Every interior tree edge is bounded by step_size_, and only the final
-  // edge connecting to the goal is bounded by goal_tolerance_ instead —
-  // this checks that structural invariant directly against the actual
-  // returned waypoints, independent of RRTPlanner's internals.
   static void expectValidStepStructure(
     const nav_msgs::msg::Path & path, double step_size, double goal_tolerance)
   {
@@ -138,11 +113,10 @@ TEST_F(RRTPlannerTest, ValidPathAvoidsWallObstacle)
 
 TEST_F(RRTPlannerTest, ThrowsWhenGoalFullyBlocked)
 {
-  // Small iteration/time budget: with the goal fully sealed off, RRT should
-  // exhaust its budget quickly and fail cleanly rather than search forever.
+
   configurePlanner(
-    CostmapOptions{10, 10, 0.1, 0.0, 0.0, false}, true, /*max_iterations=*/ 500,
-    0.3, 0.3, 0.2, /*planning_timeout=*/ 2.0, /*rng_seed=*/ 7);
+    CostmapOptions{10, 10, 0.1, 0.0, 0.0, false}, true,   500,
+    0.3, 0.3, 0.2,   2.0,   7);
   auto * costmap = costmap_ros_->getCostmap();
   amr_planner_plugins_test::sealBoxAround(costmap, 5.0, 5.0, 0.3);
 
@@ -193,7 +167,7 @@ TEST_F(RRTPlannerTest, HandlesStartEqualsGoal)
 
 TEST_F(RRTPlannerTest, AllUnknownCostmapSucceedsWhenAllowUnknownTrue)
 {
-  configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, true}, /*allow_unknown=*/ true);
+  configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, true},   true);
   auto start = makePose(1.0, 1.0);
   auto goal = makePose(9.0, 9.0);
   EXPECT_NO_THROW(planner_.createPlan(start, goal));
@@ -201,7 +175,7 @@ TEST_F(RRTPlannerTest, AllUnknownCostmapSucceedsWhenAllowUnknownTrue)
 
 TEST_F(RRTPlannerTest, AllUnknownCostmapThrowsWhenAllowUnknownFalse)
 {
-  configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, true}, /*allow_unknown=*/ false);
+  configurePlanner(CostmapOptions{10, 10, 0.1, 0.0, 0.0, true},   false);
   auto start = makePose(1.0, 1.0);
   auto goal = makePose(9.0, 9.0);
   EXPECT_THROW(planner_.createPlan(start, goal), nav2_core::PlannerException);
@@ -214,4 +188,4 @@ TEST_F(RRTPlannerTest, MinimalOneCellCostmapDoesNotCrash)
   EXPECT_NO_THROW(planner_.createPlan(pose, pose));
 }
 
-}  // namespace
+}

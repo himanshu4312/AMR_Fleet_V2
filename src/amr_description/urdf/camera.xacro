@@ -6,7 +6,7 @@
     <material name="yellow">
         <color rgba="1.0 1.0 0 1" />
     </material>
-    
+
     <link name="camera_link">
         <visual>
             <origin xyz="0 0 0" rpy="0 1.57 0" />
@@ -29,20 +29,18 @@
 
     <link name="camera_link_optical" />
 
-    <!-- CAMERA JOINT -->
     <joint name="camera_joint" type="fixed">
         <parent link="amr_body" />
         <child link="camera_link" />
         <origin xyz="0.21 -0.04 0.195" rpy="0 0 0" />
     </joint>
 
-    <!-- OPTICAL FRAME JOINT -->
     <joint name="camera_optical_joint" type="fixed">
         <parent link="camera_link" />
         <child link="camera_link_optical" />
         <origin xyz="0 0 0" rpy="-1.57 0 -1.57" />
     </joint>
-    
+
     <gazebo reference="camera_link">
         <sensor name="camera" type="camera">
             <camera>
@@ -67,7 +65,7 @@
             <always_on>1</always_on>
             <update_rate>20</update_rate>
             <visualize>true</visualize>
-            <topic>camera/image_raw</topic>            
+            <topic>camera/image_raw</topic>
         </sensor>
     </gazebo>
 </robot>

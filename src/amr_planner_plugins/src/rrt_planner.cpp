@@ -1,17 +1,3 @@
-// Copyright 2026 Himanshu
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include "amr_planner_plugins/rrt_planner.hpp"
 
 #include <algorithm>
@@ -69,10 +55,6 @@ void RRTPlanner::configure(
     node, name + ".rng_seed", rclcpp::ParameterValue(-1));
   node->get_parameter(name + ".rng_seed", rng_seed_);
 
-  // -1 means "not set" — keep using real randomness. Any other value seeds
-  // deterministically, which is only meant for reproducible tests, not
-  // production use (a fixed seed means every planning call explores the
-  // same sequence of samples).
   if (rng_seed_ >= 0) {
     rng_.seed(static_cast<std::mt19937::result_type>(rng_seed_));
   } else {
@@ -94,8 +76,7 @@ nav_msgs::msg::Path RRTPlanner::createPlan(
   const geometry_msgs::msg::PoseStamped & start,
   const geometry_msgs::msg::PoseStamped & goal)
 {
-  // Held for the whole search, same as the grid planners — the costmap can
-  // be updated concurrently by the costmap's own update thread.
+
   std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap_->getMutex()));
 
   nav_msgs::msg::Path path;
@@ -128,11 +109,6 @@ nav_msgs::msg::Path RRTPlanner::createPlan(
   const auto search_start_time = std::chrono::steady_clock::now();
   int goal_node_index = -1;
 
-  // Bounded two ways so this can never hang: max_iterations_ caps how much
-  // work is done regardless of wall-clock speed, and planning_timeout_ caps
-  // wall-clock time regardless of how many iterations that buys — needed
-  // because Humble's nav2_core::GlobalPlanner::createPlan() has no
-  // cancellation callback, unlike newer Nav2 releases.
   for (int iter = 0; iter < max_iterations_; ++iter) {
     double elapsed_s = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - search_start_time).count();
@@ -142,11 +118,6 @@ nav_msgs::msg::Path RRTPlanner::createPlan(
               std::to_string(planning_timeout_) + "s) without finding a path.");
     }
 
-    // Goal-biased sampling: most iterations explore uniformly at random so
-    // the tree eventually covers the reachable space, but with probability
-    // goal_bias_ we sample the goal directly instead — without this, a
-    // random-only tree can take far longer to happen to grow toward the
-    // goal, especially once it's already close.
     double sample_x, sample_y;
     if (unit_dist(rng_) < goal_bias_) {
       sample_x = goal.pose.position.x;
@@ -156,10 +127,6 @@ nav_msgs::msg::Path RRTPlanner::createPlan(
       sample_y = y_dist(rng_);
     }
 
-    // Steer: extend from the nearest tree node toward the sample by at most
-    // step_size_, rather than jumping straight to it — this is what keeps
-    // tree edges short and uniform, which in turn is what makes the
-    // straight-line collision check below cheap and reliable.
     int nearest_idx = nearestNode(tree, sample_x, sample_y);
     const TreeNode & nearest = tree[nearest_idx];
 
@@ -234,8 +201,7 @@ bool RRTPlanner::isStateValid(double x, double y) const
 bool RRTPlanner::isSegmentFree(double x0, double y0, double x1, double y1) const
 {
   double dist = std::hypot(x1 - x0, y1 - y0);
-  // Sample at half the costmap resolution so a thin obstacle can't be
-  // stepped over between two check points.
+
   double check_step = costmap_->getResolution() * 0.5;
   int steps = std::max(1, static_cast<int>(std::ceil(dist / check_step)));
 
@@ -266,7 +232,7 @@ int RRTPlanner::nearestNode(const std::vector<TreeNode> & tree, double x, double
   return best_idx;
 }
 
-}  // namespace amr_planner_plugins
+}
 
 #include "pluginlib/class_list_macros.hpp"
 PLUGINLIB_EXPORT_CLASS(amr_planner_plugins::RRTPlanner, nav2_core::GlobalPlanner)

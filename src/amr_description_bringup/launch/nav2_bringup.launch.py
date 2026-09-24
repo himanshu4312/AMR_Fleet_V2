@@ -37,5 +37,3 @@ def generate_launch_description():
         declare_use_sim_time_arg,
         nav2_bringup_launch,
     ])
-
-#ros2 topic pub -1 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped "{header: {frame_id: 'map'}, pose: {pose: {position: {x: 0.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}"
