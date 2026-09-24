@@ -26,6 +26,8 @@ A multi-robot simulation for four differential-drive AMRs on ROS 2 Humble. Each 
 | `amr_fleet_msgs` | `FleetRobotState` message the fleet manager publishes |
 | `amr_fleet_manager` | `fleet_manager_node` and `amcl_watchdog_node` |
 
+`amr_planner_plugins` was taken from my other repository, [AMR_Robot](https://github.com/himanshu4312/AMR_Robot), as were `amr_description` and `amr_description_bringup`. Here the bringup was extended to four namespaced robots, and `GuardedGoalChecker` was added to the planner plugins package. `amr_fleet_msgs` and `amr_fleet_manager` were written for this project.
+
 ## Requirements
 
 - Ubuntu with ROS 2 Humble
@@ -109,8 +111,19 @@ ros2 run tf2_ros tf2_echo map robot1/base_link \
 ros2 launch amr_description_bringup amr_bringup.launch.py
 ```
 
+## Issues found and how they were solved
+
+| Issue | Cause | Fix |
+|---|---|---|
+| Robot reports "Reached the goal!" within milliseconds and never moves | `controller_server` ignores a failed `map -> odom` transform and passes a default `PoseStamped` (position 0,0,0, orientation 0,0,0,1) to the goal checker, which counts it as arrived | `GuardedGoalChecker` in `amr_planner_plugins` returns "not reached" when it receives that exact pose. The fleet manager also re-sends any goal reported SUCCEEDED more than 0.75 m from the target. |
+| AMCL stops publishing `map -> odom` shortly after startup with four stacks running | CPU and DDS load. UDP buffers were too small, and everything started at once. | Raise the socket buffers (see Requirements), start robots 6 s apart, and send goals 6 s apart. A lower `transform_tolerance`, fewer robots and headless mode made no difference. `ROS_LOCALHOST_ONLY=1` crashed the nodes. |
+| AMCL stays stalled | Unknown | `amcl_watchdog_node` checks `map -> odom` age. Idle robot: re-publish its last pose to `/initialpose` with a default covariance (AMCL's own near-zero covariance produced NaN). Robot with a goal: call `reinitialize_global_localization`. If that does not help, kill AMCL so it respawns. |
+| A robot paused for a crossing has its goal aborted | Pausing sets the speed limit to about 0, so `SimpleProgressChecker` sees no movement | `movement_time_allowance` raised to 60 s |
+| A robot stays paused after the other robot has finished | Conflicts were computed from each robot's last stored plan, which stays frozen after the goal ends | The fleet manager tracks each robot's goal status and ignores robots with no active goal |
+| `controller_server` stops receiving TF updates, so its costmap freezes and goals abort | Unknown. Only that one process is affected, and an outside TF listener sees fresh data. | The fleet manager watches the local costmap footprint timestamp. If it is more than 12 s behind the clock, it kills that `controller_server` (it respawns), waits, and sends the goal again. Restarts are rate-limited so a slow restart is not judged as a new freeze. |
+
 ## Known problems
 
-- After startup, a robot's `controller_server` can stop receiving TF updates. Its local costmap then stops updating and its goals fail. AMCL and TF are fine when this happens. The cause is not known. The fleet manager detects it (the local costmap footprint timestamp falls more than 12 s behind the clock), restarts that controller, and sends the goal again. A restart takes about 30 to 60 seconds.
+- The cause of the `controller_server` TF freeze is still unknown. The restart above treats the symptom, and a restart takes about 30 to 60 seconds.
 - Goals placed on another robot's position are rejected by the planner as "occupied".
 - When a robot is paused for a crossing, it waits where it is. If that spot is another robot's goal, the two can block each other.
